@@ -1,7 +1,7 @@
 """
 DVD Player menu item.
 
-Plays DVDs using mplayer with gamepad control monitoring.
+Plays DVDs using mpv with gamepad control monitoring.
 L+R buttons pressed simultaneously will exit playback.
 """
 
@@ -10,6 +10,7 @@ import threading
 import time
 import os
 import signal
+import socket
 
 import pygame
 
@@ -33,20 +34,35 @@ HAT_RIGHT = (1, 0)
 
 
 class GamepadMonitor:
-    """Monitor gamepad for L+R exit combo and send commands to mplayer."""
+    """Monitor gamepad for L+R exit combo and send commands to mpv."""
     
-    def __init__(self, mplayer_process, joystick):
-        self.process = mplayer_process
+    def __init__(self, mpv_process, ipc_socket_path, joystick):
+        self.process = mpv_process
+        self.ipc_socket_path = ipc_socket_path
         self.joystick = joystick
         self.running = True
         self.thread = None
+        self.sock = None
+    
+    def connect_ipc(self):
+        """Connect to mpv's IPC socket."""
+        for _ in range(50):  # Try for up to 5 seconds
+            try:
+                self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                self.sock.connect(self.ipc_socket_path)
+                self.sock.setblocking(False)
+                return True
+            except (socket.error, FileNotFoundError):
+                time.sleep(0.1)
+        return False
     
     def send_command(self, cmd):
-        """Send a command to mplayer via stdin."""
-        if self.process and self.process.poll() is None:
+        """Send a command to mpv via IPC socket."""
+        if self.sock:
             try:
-                self.process.stdin.write(f"{cmd}\n".encode())
-                self.process.stdin.flush()
+                import json
+                message = json.dumps({"command": cmd}) + "\n"
+                self.sock.send(message.encode())
             except (BrokenPipeError, OSError):
                 pass
     
@@ -54,6 +70,10 @@ class GamepadMonitor:
         """Main monitoring loop running in background thread."""
         pygame.init()
         pygame.joystick.init()
+        
+        # Connect to mpv IPC
+        if not self.connect_ipc():
+            print("Warning: Could not connect to mpv IPC socket")
         
         # Re-initialize joystick in this thread
         joystick = None
@@ -74,39 +94,39 @@ class GamepadMonitor:
                     
                     if l_pressed and r_pressed:
                         print("L+R detected, exiting DVD player...")
-                        self.send_command("quit")
+                        self.send_command(["quit"])
                         self.running = False
                         break
                     
                     # A button - toggle pause
                     if joystick.get_button(BUTTON_A):
-                        self.send_command("pause")
+                        self.send_command(["cycle", "pause"])
                         time.sleep(0.3)  # Debounce
                     
                     # B button - go back to menu (stop)
                     if joystick.get_button(BUTTON_B):
-                        self.send_command("quit")
+                        self.send_command(["quit"])
                         self.running = False
                         break
                     
                     # Start - toggle pause (alternate)
                     if joystick.get_button(BUTTON_START):
-                        self.send_command("pause")
+                        self.send_command(["cycle", "pause"])
                         time.sleep(0.3)
                     
                     # Select - toggle subtitles
                     if joystick.get_button(BUTTON_SELECT):
-                        self.send_command("sub_select")
+                        self.send_command(["cycle", "sub"])
                         time.sleep(0.3)
                     
                     # X button - cycle audio tracks
                     if joystick.get_button(BUTTON_X):
-                        self.send_command("switch_audio")
+                        self.send_command(["cycle", "audio"])
                         time.sleep(0.3)
                     
                     # Y button - toggle fullscreen (shouldn't be needed)
                     if joystick.get_button(BUTTON_Y):
-                        self.send_command("vo_fullscreen")
+                        self.send_command(["cycle", "fullscreen"])
                         time.sleep(0.3)
                     
                     # D-pad controls
@@ -114,13 +134,13 @@ class GamepadMonitor:
                         hat = joystick.get_hat(0)
                         if hat != last_hat:
                             if hat == HAT_LEFT:
-                                self.send_command("seek -10")
+                                self.send_command(["seek", "-10"])
                             elif hat == HAT_RIGHT:
-                                self.send_command("seek 10")
+                                self.send_command(["seek", "10"])
                             elif hat == HAT_UP:
-                                self.send_command("seek 60")
+                                self.send_command(["seek", "60"])
                             elif hat == HAT_DOWN:
-                                self.send_command("seek -60")
+                                self.send_command(["seek", "-60"])
                             last_hat = hat
                     except pygame.error:
                         pass
@@ -138,6 +158,11 @@ class GamepadMonitor:
     def stop(self):
         """Stop the monitor."""
         self.running = False
+        if self.sock:
+            try:
+                self.sock.close()
+            except OSError:
+                pass
         if self.thread:
             self.thread.join(timeout=1.0)
 
@@ -162,45 +187,54 @@ def launch(joystick=None):
     """Launch the DVD player."""
     dvd_device = find_dvd_device()
     
-    # mplayer command for DVD playback
-    # -fs: fullscreen
-    # -slave: enable slave mode for commands via stdin
-    # -quiet: reduce output
-    # -dvd-device: specify DVD device
+    # Create a unique IPC socket path
+    ipc_socket_path = f"/tmp/mpv-dvd-{os.getpid()}.sock"
+    
+    # Clean up any existing socket
+    if os.path.exists(ipc_socket_path):
+        os.unlink(ipc_socket_path)
+    
+    # mpv command for DVD playback
+    # --fs: fullscreen
+    # --input-ipc-server: enable IPC for commands
+    # --dvd-device: specify DVD device
     cmd = [
-        "mplayer",
-        "-fs",
-        "-slave",
-        "-quiet",
-        "-dvd-device", dvd_device,
+        "mpv",
+        "--fs",
+        f"--input-ipc-server={ipc_socket_path}",
+        f"--dvd-device={dvd_device}",
         "dvd://",
     ]
     
     print(f"Launching DVD player: {' '.join(cmd)}")
     
     try:
-        # Start mplayer process
+        # Start mpv process
         process = subprocess.Popen(
             cmd,
-            stdin=subprocess.PIPE,
+            stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             preexec_fn=os.setsid,
         )
         
         # Start gamepad monitor
-        monitor = GamepadMonitor(process, joystick)
+        monitor = GamepadMonitor(process, ipc_socket_path, joystick)
         monitor.start()
         
-        # Wait for mplayer to finish
+        # Wait for mpv to finish
         process.wait()
         
         # Clean up monitor
         monitor.stop()
         
+        # Clean up IPC socket
+        if os.path.exists(ipc_socket_path):
+            os.unlink(ipc_socket_path)
+        
     except FileNotFoundError:
-        print("Error: mplayer not found. Please install mplayer.")
-        show_error_message("mplayer not found")
+        print("Error: mpv not found. Please install mpv.")
+        show_error_message("mpv not found")
     except Exception as e:
         print(f"Error launching DVD player: {e}")
         show_error_message(str(e))
