@@ -6,14 +6,14 @@ A Roman-themed entertainment console interface designed for SNES controller inpu
 
 - Full-screen interface optimized for TV displays
 - SNES gamepad navigation (no keyboard/mouse required)
-- DVD playback via mplayer
+- DVD playback via mpv
 - Modular menu system for easy extension
 
 ## Requirements
 
 - Python 3.9+
 - pygame
-- mplayer (for DVD playback)
+- mpv (for DVD playback)
 - SNES USB controller
 
 ## Installation
@@ -22,14 +22,14 @@ A Roman-themed entertainment console interface designed for SNES controller inpu
 pip install -r requirements.txt
 ```
 
-For DVD playback, install mplayer:
+For DVD playback, install mpv:
 
 ```bash
 # Debian/Ubuntu
-sudo apt install mplayer
+sudo apt install mpv
 
 # Arch Linux
-sudo pacman -S mplayer
+sudo pacman -S mpv
 ```
 
 ## Usage
@@ -56,10 +56,10 @@ ludarium
 
 | Button | Action |
 |--------|--------|
-| A / Start | Pause/Play |
-| B | Stop and return to menu |
-| D-Pad Left/Right | Seek ±10 seconds |
-| D-Pad Up/Down | Seek ±60 seconds |
+| A / Start | Pause/Play (or select in menu mode) |
+| B | Stop and return to menu (or back in menu mode) |
+| D-Pad Left/Right | Seek ±10 seconds (or navigate in menu mode) |
+| D-Pad Up/Down | Seek ±60 seconds (or navigate in menu mode) |
 | Select | Cycle subtitles |
 | X | Cycle audio tracks |
 | L + R | Exit to menu |
